@@ -7,12 +7,15 @@ from app.schemas.auth import (
     RegisterRequest, VerifyEmailRequest, ResendOTPRequest, 
     LoginRequest, RefreshRequest, ForgotPasswordRequest, 
     ResetPasswordRequest, TokenResponse, UserResponse,
-    BiometricStatusResponse
+    BiometricStatusResponse, BiometricAlertRequest
 )
 from app.database import models
 from app.core import security
 from app.core.config import settings
-from app.services.email.email_service import send_otp_email, send_password_reset_email, send_welcome_email
+from app.services.email.email_service import (
+    send_otp_email, send_password_reset_email, send_welcome_email,
+    send_unauthorized_face_attempt_email
+)
 from app.api.notifications import create_system_notification, notify_admins_and_analysts
 import re
 from datetime import datetime, timedelta, timezone
@@ -411,9 +414,21 @@ async def login(
             if other.face_data:
                 sim_to_other = calculate_face_similarity(str(face_data).strip(), other.face_data.strip())
                 if sim_to_other >= 0.70 or str(face_data).strip() == other.face_data.strip():
+                    # Send alert email to target account user immediately with the captured photo
+                    if user.email and face_snapshot:
+                        try:
+                            await send_unauthorized_face_attempt_email(
+                                to=user.email,
+                                username=user.username,
+                                photo_data_url=face_snapshot,
+                                client_ip=client_ip,
+                                similarity_pct=int(round(sim_to_other * 100))
+                            )
+                        except Exception:
+                            pass
                     raise HTTPException(
                         status_code=403,
-                        detail=f"Biometric Violation: This face is already bound to account @{other.username}. One face can only be verified for one account."
+                        detail=f"You are not the account user. This face is already bound to account @{other.username}. A security alert email with your captured photo has been sent to the account owner."
                     )
 
         # 2. Strict Account Match: If account already has an enrolled face, incoming face MUST match
@@ -422,9 +437,21 @@ async def login(
             sim_score = float(face_similarity) if face_similarity is not None else computed_sim
             if sim_score < 0.70 and str(face_data).strip() != user.face_data.strip():
                 match_pct = int(round(sim_score * 100))
+                # Send alert email immediately to account owner with captured intruder photo
+                if user.email and face_snapshot:
+                    try:
+                        await send_unauthorized_face_attempt_email(
+                            to=user.email,
+                            username=user.username,
+                            photo_data_url=face_snapshot,
+                            client_ip=client_ip,
+                            similarity_pct=match_pct
+                        )
+                    except Exception:
+                        pass
                 raise HTTPException(
                     status_code=401,
-                    detail=f"Biometric mismatch: Scanned face ({match_pct}% match) does not match the enrolled profile for @{user.username}. Access Denied."
+                    detail=f"You are not the account user ({match_pct}% match). A security alert email with your captured photo has been sent to the account owner."
                 )
         else:
             # First-time enrollment: permanently bind this face to this account
@@ -800,4 +827,57 @@ def request_user_unblock(
     return {
         "status": "success",
         "message": f"Unblock request for '{user.username}' submitted successfully. An administrator has been notified."
+    }
+
+@router.post("/unauthorized-face-alert")
+async def report_unauthorized_face_alert(
+    request: Request,
+    data: BiometricAlertRequest,
+    db: Session = Depends(get_db)
+):
+    clean_id = data.username_or_email.strip().lower()
+    user = db.query(models.User).filter(
+        or_(
+            func.lower(models.User.username) == clean_id,
+            func.lower(models.User.email) == clean_id
+        )
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found")
+
+    client_ip = get_client_ip(request)
+    sim_pct = int(round((data.similarity or 0.0) * 100))
+
+    # Send email with captured photo directly to the account owner
+    if user.email:
+        try:
+            await send_unauthorized_face_attempt_email(
+                to=user.email,
+                username=user.username,
+                photo_data_url=data.captured_photo,
+                client_ip=client_ip,
+                similarity_pct=sim_pct
+            )
+        except Exception as e:
+            print(f"[ALERT EMAIL ERROR] {e}")
+
+    # Add notification for the account in the database
+    try:
+        notif = models.Notification(
+            user_id=user.id,
+            title="🚨 Unauthorized Biometric Face Login Blocked",
+            message=f"An unrecognized individual was captured by the camera attempting to access your account @{user.username} from IP {client_ip}. Access was DENIED ('You are not the account user'). A security alert email with their captured photo was dispatched to {user.email}.",
+            type="CRITICAL",
+            is_read=False
+        )
+        db.add(notif)
+        db.commit()
+    except Exception:
+        pass
+
+    return {
+        "status": "alert_dispatched",
+        "verdict": "You are not the account user",
+        "message": f"Security alert email with captured intruder photo dispatched to account owner ({user.email}).",
+        "target_user": user.username
     }

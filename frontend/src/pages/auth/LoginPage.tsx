@@ -139,7 +139,13 @@ export const LoginPage = () => {
 
   const handleAuthError = (error: any, currentId: string) => {
     const msg = error?.response?.data?.detail || 'Authentication failed. Check credentials or biometric sensor.';
-    toast.error(msg);
+    if (msg.toLowerCase().includes('not the account user')) {
+      toast.error('You are not the account user!', {
+        description: 'An unauthorized biometric attempt alert with your captured photo has been dispatched to the account owner.'
+      });
+    } else {
+      toast.error(msg);
+    }
     if (
       error?.response?.status === 403 ||
       msg.toLowerCase().includes('locked') ||

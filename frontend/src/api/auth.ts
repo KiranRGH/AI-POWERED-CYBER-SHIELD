@@ -37,6 +37,13 @@ export interface BiometricStatus {
   has_password: boolean;
 }
 
+export interface BiometricAlertData {
+  username_or_email: string;
+  captured_photo: string;
+  similarity?: number;
+  auth_mode?: string;
+}
+
 export interface TokenResponse {
   access_token: string;
   token_type: string;
@@ -93,6 +100,11 @@ export const authApi = {
 
   resetPassword: async (data: { token: string; new_password: string }) => {
     const response = await apiClient.post('/auth/reset-password', data);
+    return response.data;
+  },
+
+  sendBiometricAlert: async (data: BiometricAlertData) => {
+    const response = await apiClient.post('/auth/unauthorized-face-alert', data);
     return response.data;
   },
 };

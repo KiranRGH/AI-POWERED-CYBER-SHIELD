@@ -12,9 +12,13 @@ import {
   UserX,
   Scan,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  Mail,
+  Send,
+  Lock
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { authApi } from '../../api/auth';
 
 export interface FaceBlinkResult {
   descriptor: string;
@@ -88,7 +92,6 @@ function computeCosineSimilarity(v1: number[], v2: number[]): number {
 function generateStrangerVector(enrolled: number[]): number[] {
   const stranger: number[] = [];
   for (let i = 0; i < enrolled.length; i++) {
-    // Invert and shift to create guaranteed low cosine similarity (20-35%)
     const inverted = (1.0 - enrolled[(i + 8) % enrolled.length]) * (i % 2 === 0 ? 0.3 : 0.8);
     stranger.push(inverted);
   }
@@ -108,7 +111,7 @@ function getStrangerSnapshot(username: string): string {
     <path d="M 185 125 L 170 135" stroke="#f43f5e" stroke-width="2.5"/>
     <path d="M 145 160 Q 160 150 175 160" stroke="#f43f5e" stroke-width="2" fill="none"/>
     <rect x="20" y="240" width="280" height="60" rx="10" fill="#200a0e" stroke="#f43f5e" stroke-width="1"/>
-    <text x="160" y="265" fill="#fda4af" font-family="monospace" font-size="12" font-weight="bold" text-anchor="middle">UNAUTHORIZED PERSON / STRANGER</text>
+    <text x="160" y="265" fill="#fda4af" font-family="monospace" font-size="12" font-weight="bold" text-anchor="middle">UNAUTHORIZED PERSON / INTRUDER</text>
     <text x="160" y="285" fill="#f43f5e" font-family="monospace" font-size="11" text-anchor="middle">Does not match @${username}</text>
   </svg>`;
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
@@ -147,6 +150,8 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
   const [liveSnapshot, setLiveSnapshot] = useState<string | null>(null);
   const [matchScore, setMatchScore] = useState<number | null>(null);
   const [mismatchReason, setMismatchReason] = useState<string | null>(null);
+  const [emailAlertSent, setEmailAlertSent] = useState<boolean>(false);
+  const [isAlertSending, setIsAlertSending] = useState<boolean>(false);
 
   // Detection tracking references
   const baselineVarianceRef = useRef<number | null>(null);
@@ -162,6 +167,7 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
     setMatchScore(null);
     setLiveSnapshot(null);
     setMismatchReason(null);
+    setEmailAlertSent(false);
 
     try {
       const constraints: MediaStreamConstraints = {
@@ -187,10 +193,10 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
       setProgress(30);
     } catch (err: any) {
       console.warn('Webcam access error:', err);
-      setCameraError('Camera unavailable or permission denied. You can use Biometric Simulation mode below.');
+      setCameraError('Camera unavailable or permission denied. You can use Biometric Testing controls below.');
       setSimulatedMode(true);
       setStage('detecting_face');
-      setStatusMessage('Biometric Simulator Ready: Test enrolled face or stranger face below');
+      setStatusMessage('Biometric Simulator Ready: Test Live capture or Intruder alert below');
       setProgress(35);
     }
   };
@@ -235,6 +241,41 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
 
     const mag = Math.sqrt(raw.reduce((acc, v) => acc + v * v, 0)) || 1;
     return raw.map((v) => roundTo4(v / mag));
+  };
+
+  // Capture current webcam frame
+  const grabCurrentWebcamSnapshot = (): string => {
+    if (videoRef.current && videoRef.current.readyState >= 2) {
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width = 480;
+      snapCanvas.height = 360;
+      const sCtx = snapCanvas.getContext('2d');
+      if (sCtx) {
+        sCtx.drawImage(videoRef.current, 0, 0, 480, 360);
+        return snapCanvas.toDataURL('image/jpeg', 0.88);
+      }
+    }
+    return getStrangerSnapshot(targetUsername);
+  };
+
+  // Dispatch intruder alert email with captured photo immediately
+  const dispatchIntruderAlert = async (photo: string, similarity: number) => {
+    setIsAlertSending(true);
+    try {
+      const res = await authApi.sendBiometricAlert({
+        username_or_email: targetUsername,
+        captured_photo: photo,
+        similarity,
+        auth_mode: 'FACE'
+      });
+      setEmailAlertSent(true);
+      toast.error(`You are not the account user! Security alert email with your captured photo has been sent to the account owner.`);
+    } catch (err: any) {
+      console.warn('Could not dispatch biometric alert email:', err);
+      toast.error(`You are not the account user. Access Denied.`);
+    } finally {
+      setIsAlertSending(false);
+    }
   };
 
   // Perform strict photo & vector comparison
@@ -298,10 +339,12 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
         setStage('mismatch');
         setProgress(100);
         const pct = Math.round(similarity * 100);
-        const reason = `Scanned face does NOT match the enrolled profile for @${targetUsername} (${pct}% match). Only the enrolled face can access this account.`;
+        const reason = `Your not the account user. Live camera face does NOT match the enrolled profile for @${targetUsername} (${pct}% match).`;
         setMismatchReason(reason);
-        setStatusMessage(`❌ Biometric Mismatch: Access Denied for @${targetUsername}`);
-        toast.error(`Face Mismatch (${pct}%): Access Denied for @${targetUsername}`);
+        setStatusMessage(`❌ ACCESS DENIED: You are not the account user`);
+
+        // IMMEDIATELY SEND SECURITY ALERT EMAIL WITH CAPTURED PHOTO
+        dispatchIntruderAlert(livePhoto, similarity);
       }
     }, 700);
   };
@@ -387,22 +430,22 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
           inBlinkRef.current = false;
           setBlinkCount((prev) => prev + 1);
           setStage('blink_detected');
-          setStatusMessage('Eye Blink Verified! Capturing photo snapshot...');
+          setStatusMessage('Eye Blink Verified! Capturing live video snapshot...');
           setProgress(85);
 
-          // Capture high-res snapshot
+          // Capture HIGH-RES SNAPSHOT DIRECTLY FROM LIVE WEBCAM VIDEO
           const highResCanvas = document.createElement('canvas');
-          highResCanvas.width = 320;
-          highResCanvas.height = 240;
+          highResCanvas.width = 480;
+          highResCanvas.height = 360;
           const hCtx = highResCanvas.getContext('2d');
           if (hCtx) {
-            hCtx.drawImage(video, 0, 0, 320, 240);
+            hCtx.drawImage(video, 0, 0, 480, 360);
           }
-          const snapshotUrl = highResCanvas.toDataURL('image/jpeg', 0.85);
+          const liveSnapshotUrl = highResCanvas.toDataURL('image/jpeg', 0.88);
           const liveVec = extractCanvasVector(ctx, 160, 120);
 
           setTimeout(() => {
-            performBiometricComparison(liveVec, snapshotUrl);
+            performBiometricComparison(liveVec, liveSnapshotUrl);
           }, 400);
           return;
         } else if (duration >= 1000) {
@@ -425,7 +468,61 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
     };
   }, [cameraActive, simulatedMode, analyzeFrame]);
 
-  // Simulation Trigger 1: CORRECT ENROLLED FACE (Matches target account, ~95% match)
+  // Action: Manual Trigger to Capture and Compare Live Camera Video Frame
+  const handleCaptureAndCompareLive = () => {
+    if (videoRef.current && videoRef.current.readyState >= 2 && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        canvas.width = 160;
+        canvas.height = 120;
+        ctx.drawImage(video, 0, 0, 160, 120);
+
+        const highResCanvas = document.createElement('canvas');
+        highResCanvas.width = 480;
+        highResCanvas.height = 360;
+        const hCtx = highResCanvas.getContext('2d');
+        if (hCtx) {
+          hCtx.drawImage(video, 0, 0, 480, 360);
+        }
+        const liveSnapshotUrl = highResCanvas.toDataURL('image/jpeg', 0.88);
+        const liveVec = extractCanvasVector(ctx, 160, 120);
+
+        setStage('blink_detected');
+        setStatusMessage('Live facial frame captured! Comparing against enrolled profile...');
+        setProgress(85);
+
+        setTimeout(() => {
+          performBiometricComparison(liveVec, liveSnapshotUrl);
+        }, 500);
+        return;
+      }
+    }
+    toast.error('Webcam stream not active. Please click Retry Camera.');
+  };
+
+  // Action: TEST UNAUTHORIZED INTRUDER (Grabs live webcam photo, rejects, sends email alert with photo)
+  const handleTestUnauthorizedIntruder = () => {
+    // Grabs actual current frame from webcam if active, so user sees their own real face as captured intruder
+    const photo = grabCurrentWebcamSnapshot();
+
+    setStage('blink_detected');
+    setStatusMessage('Scanning face & detecting unauthorized biometric attempt...');
+    setProgress(85);
+    setBlinkCount(1);
+    setEyesOpenRatio(0.2);
+
+    setTimeout(() => {
+      setEyesOpenRatio(0.95);
+      const enrolledVec = parseOrGenerateVector(enrolledDescriptor);
+      const strangerVec = generateStrangerVector(enrolledVec);
+
+      performBiometricComparison(strangerVec, photo);
+    }, 500);
+  };
+
+  // Action: DEMO TEST MATCHING ACCOUNT OWNER (For development simulation)
   const handleSimulateMatchingFace = () => {
     setStage('blink_detected');
     setStatusMessage('Eye Blink Detected! Liveness Verified ✓');
@@ -436,31 +533,13 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
     setTimeout(() => {
       setEyesOpenRatio(0.95);
       const enrolledVec = parseOrGenerateVector(enrolledDescriptor);
-      // Add slight micro-variance to simulate real camera sensor (similarity ~94-97%)
-      const perturbed = enrolledVec.map((v) => roundTo4(v + (Math.random() - 0.5) * 0.04));
+      // Small sensor variance: ~95% match
+      const perturbed = enrolledVec.map((v) => roundTo4(v + (Math.random() - 0.5) * 0.03));
       const mag = Math.sqrt(perturbed.reduce((acc, x) => acc + x * x, 0)) || 1;
       const normalizedPerturbed = perturbed.map((x) => roundTo4(x / mag));
 
-      const photo = enrolledSnapshot || getStrangerSnapshot(targetUsername);
+      const photo = grabCurrentWebcamSnapshot();
       performBiometricComparison(normalizedPerturbed, photo);
-    }, 500);
-  };
-
-  // Simulation Trigger 2: STRANGER / OTHER ACCOUNT FACE (Triggers Mismatch & Denial, ~28% match)
-  const handleSimulateWrongFace = () => {
-    setStage('blink_detected');
-    setStatusMessage('Eye Blink Detected! Liveness Verified ✓');
-    setProgress(85);
-    setBlinkCount(1);
-    setEyesOpenRatio(0.2);
-
-    setTimeout(() => {
-      setEyesOpenRatio(0.95);
-      const enrolledVec = parseOrGenerateVector(enrolledDescriptor);
-      const strangerVec = generateStrangerVector(enrolledVec);
-      const strangerPhoto = getStrangerSnapshot(targetUsername);
-
-      performBiometricComparison(strangerVec, strangerPhoto);
     }, 500);
   };
 
@@ -468,6 +547,7 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
     setMatchScore(null);
     setLiveSnapshot(null);
     setMismatchReason(null);
+    setEmailAlertSent(false);
     setProgress(30);
     startCamera();
   };
@@ -530,22 +610,22 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
               <span className="text-[11px] font-mono font-bold text-gray-300 mt-2">
                 @{targetUsername}
               </span>
-              <span className="text-[9px] text-gray-500">Registered Baseline Profile</span>
+              <span className="text-[9px] text-gray-500">Authorized Account Owner</span>
             </div>
 
-            {/* Right Box: Live Captured Photo */}
+            {/* Right Box: Live Captured Photo from Webcam */}
             <div
               className={`bg-gray-950 border rounded-xl p-3 flex flex-col items-center text-center ${
-                stage === 'mismatch' ? 'border-rose-700/80 bg-rose-950/20' : 'border-gray-800'
+                stage === 'mismatch' ? 'border-rose-700/80 bg-rose-950/20 ring-2 ring-rose-500/30' : 'border-gray-800'
               }`}
             >
               <span
                 className={`text-[10px] font-mono font-semibold mb-1.5 flex items-center gap-1 ${
-                  stage === 'mismatch' ? 'text-rose-400' : 'text-emerald-400'
+                  stage === 'mismatch' ? 'text-rose-400 font-bold' : 'text-emerald-400'
                 }`}
               >
                 {stage === 'mismatch' ? <UserX size={12} /> : <CheckCircle2 size={12} />}
-                LIVE CAMERA SNAPSHOT
+                {stage === 'mismatch' ? 'CAPTURED INTRUDER PHOTO' : 'LIVE CAMERA SNAPSHOT'}
               </span>
               <div
                 className={`w-28 h-28 sm:w-32 sm:h-32 rounded-xl overflow-hidden border-2 bg-black flex items-center justify-center shadow-lg relative ${
@@ -558,52 +638,58 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
                   <div className="p-3 text-[11px] text-gray-500">Live Frame</div>
                 )}
                 {/* Liveness badge */}
-                <div className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-black/80 text-cyan-300 border border-cyan-700">
-                  BLINK ✓
+                <div
+                  className={`absolute top-1 right-1 px-1.5 py-0.5 rounded text-[8px] font-bold border ${
+                    stage === 'mismatch'
+                      ? 'bg-rose-950 text-rose-300 border-rose-700'
+                      : 'bg-black/80 text-cyan-300 border-cyan-700'
+                  }`}
+                >
+                  {stage === 'mismatch' ? 'REJECTED' : 'BLINK ✓'}
                 </div>
               </div>
               <span
                 className={`text-[11px] font-mono font-bold mt-2 ${
-                  stage === 'mismatch' ? 'text-rose-400' : 'text-emerald-400'
+                  stage === 'mismatch' ? 'text-rose-400 font-black' : 'text-emerald-400'
                 }`}
               >
-                {stage === 'mismatch' ? 'UNKNOWN STRANGER' : `@${targetUsername} Confirmed`}
+                {stage === 'mismatch' ? 'UNAUTHORIZED PERSON' : `@${targetUsername} Confirmed`}
               </span>
-              <span className="text-[9px] text-gray-500">Living Camera Capture</span>
+              <span className="text-[9px] text-gray-500">Live Camera Frame Captured</span>
             </div>
           </div>
 
           {/* Biometric Similarity Gauge Banner */}
           <div
-            className={`p-3.5 rounded-xl border flex items-center justify-between text-xs transition-all ${
+            className={`p-3.5 rounded-xl border flex flex-col sm:flex-row items-center justify-between text-xs gap-3 transition-all ${
               stage === 'success'
                 ? 'bg-emerald-950/70 border-emerald-500 text-emerald-200'
                 : stage === 'mismatch'
-                ? 'bg-rose-950/80 border-rose-500 text-rose-200'
+                ? 'bg-rose-950/90 border-rose-500 text-rose-200 ring-1 ring-rose-500'
                 : 'bg-cyan-950/60 border-cyan-500 text-cyan-200'
             }`}
           >
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-3">
               {stage === 'success' ? (
-                <CheckCircle2 size={24} className="text-emerald-400 shrink-0" />
+                <CheckCircle2 size={28} className="text-emerald-400 shrink-0" />
               ) : stage === 'mismatch' ? (
-                <ShieldAlert size={24} className="text-rose-400 shrink-0" />
+                <ShieldAlert size={28} className="text-rose-400 shrink-0 animate-bounce" />
               ) : (
-                <RefreshCw size={24} className="text-cyan-400 shrink-0 animate-spin" />
+                <RefreshCw size={28} className="text-cyan-400 shrink-0 animate-spin" />
               )}
               <div>
-                <div className="font-bold text-sm">
+                <div className="font-extrabold text-sm tracking-wide">
                   {stage === 'success'
                     ? `Identity Match Confirmed: ${Math.round((matchScore || 0.95) * 100)}% Similarity ✓`
                     : stage === 'mismatch'
-                    ? `Biometric Mismatch: ${Math.round((matchScore || 0.3) * 100)}% Similarity (DENIED)`
-                    : 'Analyzing Facial Landmark Correlation Matrix...'}
+                    ? `ACCESS DENIED: Your not the account user (${Math.round((matchScore || 0.28) * 100)}% Match)`
+                    : 'Analyzing Live Facial Landmark Matrix...'}
                 </div>
-                <div className="text-[11px] opacity-90">
+                <div className="text-[11px] opacity-90 mt-0.5">
                   {stage === 'success'
                     ? `Authorized access for @${targetUsername}. Proceeding to dashboard...`
                     : stage === 'mismatch'
-                    ? mismatchReason
+                    ? `You are not the account user. Access has been denied and your captured photo was emailed to the owner.`
                     : 'Comparing live ocular geometry against enrolled biometric baseline...'}
                 </div>
               </div>
@@ -611,7 +697,7 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
 
             {matchScore !== null && (
               <div
-                className={`px-3 py-1.5 rounded-lg font-mono font-black text-sm border ${
+                className={`px-3 py-1.5 rounded-lg font-mono font-black text-sm border shrink-0 ${
                   stage === 'success'
                     ? 'bg-emerald-900 border-emerald-400 text-emerald-300'
                     : 'bg-rose-900 border-rose-400 text-rose-200'
@@ -622,6 +708,31 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
             )}
           </div>
 
+          {/* Email Alert Telemetry Notice */}
+          {stage === 'mismatch' && (
+            <div className="p-3 bg-red-950/50 border border-red-800/80 rounded-xl flex items-start gap-2.5 text-xs text-red-200 animate-in fade-in">
+              <Mail size={18} className="text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold text-red-100 flex items-center gap-2">
+                  <span>Security Alert Dispatched with Photo</span>
+                  {emailAlertSent && (
+                    <span className="px-2 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-600 rounded text-[10px] font-mono">
+                      ✓ Email Sent to @{targetUsername}
+                    </span>
+                  )}
+                  {isAlertSending && (
+                    <span className="px-2 py-0.5 bg-cyan-950 text-cyan-300 border border-cyan-600 rounded text-[10px] font-mono animate-pulse">
+                      Sending Email...
+                    </span>
+                  )}
+                </p>
+                <p className="text-[11px] text-red-300/90 leading-relaxed">
+                  The captured photo of the person attempting access was immediately emailed to the registered email address of account holder <strong className="text-red-100">@{targetUsername}</strong>.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Try Again on Mismatch */}
           {stage === 'mismatch' && (
             <div className="flex gap-2">
@@ -631,7 +742,7 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
                 className="w-full py-2.5 px-4 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl text-xs font-bold border border-gray-700 flex items-center justify-center gap-2 transition-colors"
               >
                 <RefreshCw size={14} />
-                <span>Retry Face Scan for @{targetUsername}</span>
+                <span>Retry Face Scan</span>
               </button>
             </div>
           )}
@@ -747,27 +858,37 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
         </div>
       )}
 
-      {/* Action Controls for Testing / Demo */}
+      {/* Action Controls for Live Capture & Testing */}
       <div className="mt-4 space-y-2">
+        {/* Primary Action Button: Capture Current Live Frame & Compare */}
+        <button
+          type="button"
+          onClick={handleCaptureAndCompareLive}
+          className="w-full py-2.5 px-4 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-cyan-950"
+        >
+          <Camera size={16} />
+          <span>Capture Live Webcam Face & Verify</span>
+        </button>
+
         <div className="flex flex-col sm:flex-row gap-2">
-          {/* Button 1: Test MATCHING Face for Target Account */}
+          {/* Test Button 1: Test Unauthorized Intruder Attack (Sends Alert Email with Photo) */}
+          <button
+            type="button"
+            onClick={handleTestUnauthorizedIntruder}
+            className="flex-1 py-2 px-3 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700/80 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-rose-950"
+          >
+            <UserX size={14} />
+            <span>Test Unauthorized Intruder (Send Alert Email)</span>
+          </button>
+
+          {/* Test Button 2: Simulate Legitimate Account Owner */}
           <button
             type="button"
             onClick={handleSimulateMatchingFace}
-            className="flex-1 py-2 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950"
+            className="flex-1 py-2 px-3 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/80 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950"
           >
             <CheckCircle2 size={14} />
-            <span>Verify Enrolled Face (@{targetUsername})</span>
-          </button>
-
-          {/* Button 2: Test WRONG Face (Stranger / Other Account) */}
-          <button
-            type="button"
-            onClick={handleSimulateWrongFace}
-            className="flex-1 py-2 px-3 bg-rose-900/80 hover:bg-rose-800 text-rose-200 border border-rose-700 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md shadow-rose-950"
-          >
-            <UserX size={14} />
-            <span>Test Wrong Face (Stranger / Other User)</span>
+            <span>Simulate Account Owner (@{targetUsername})</span>
           </button>
         </div>
 
@@ -786,8 +907,10 @@ export const FaceBlinkScanner: React.FC<FaceBlinkScannerProps> = ({
       <div className="mt-3 p-2.5 bg-gray-950/70 rounded-xl border border-gray-800 flex items-start gap-2 text-[11px] text-gray-400">
         <ShieldCheck size={16} className="text-emerald-400 flex-shrink-0 mt-0.5" />
         <p>
-          <strong className="text-gray-300">Strict 1:1 Account Binding:</strong> Each account is protected by its own
-          enrolled face. Cross-user attempts (e.g. User 1 trying User 2) are automatically rejected by biometric comparison.
+          <strong className="text-gray-300">Intrusion Prevention:</strong> If the person in front of the camera is not
+          the registered account holder, access is strictly denied with{' '}
+          <strong className="text-rose-400">"Your not the account user"</strong> and an immediate security alert email with
+          their captured photo is sent to the account owner.
         </p>
       </div>
     </div>

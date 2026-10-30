@@ -43,6 +43,12 @@ class BiometricStatusResponse(BaseModel):
     fingerprint_credential_id: Optional[str] = None
     has_password: bool = True
 
+class BiometricAlertRequest(BaseModel):
+    username_or_email: str
+    captured_photo: str
+    similarity: Optional[float] = 0.0
+    auth_mode: Optional[str] = "FACE"
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
