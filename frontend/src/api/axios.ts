@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { getAccessToken, setAccessToken } from '../contexts/AuthContext';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+// In browser context, use empty string fallback so API requests route through Vite proxy (/api/v1) seamlessly on local, LAN, and public tunnel links
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export const apiClient = axios.create({
   baseURL: `${BASE_URL}/api/v1`,
