@@ -84,7 +84,7 @@ def main():
     t_frontend.start()
 
     print("\n" + "=" * 65)
-    print("  ✓ BOTH SERVICES RUNNING CONCURRENTLY")
+    print("  [OK] BOTH SERVICES RUNNING CONCURRENTLY")
     print("  - Frontend: http://localhost:3000")
     print("  - Backend:  http://localhost:8000 (Docs: http://localhost:8000/docs)")
     print("  - Press Ctrl+C at any time to terminate both services cleanly.")
