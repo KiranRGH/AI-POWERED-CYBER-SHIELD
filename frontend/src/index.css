@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#0a0f1e] text-gray-200;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-800 rounded-xl border border-gray-700 shadow-sm p-4;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0f1e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1f2937;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #374151;
+}
