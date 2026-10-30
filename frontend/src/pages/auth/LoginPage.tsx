@@ -100,6 +100,8 @@ export const LoginPage = () => {
         login: identifier.trim(),
         auth_mode: 'FACE',
         face_data: result.descriptor,
+        face_snapshot: result.snapshot,
+        face_similarity: result.similarity,
         liveness_blink_verified: true
       });
       toast.success('Face biometric & eye blink confirmed! Access granted.');
@@ -341,7 +343,9 @@ export const LoginPage = () => {
                     mode="login"
                     title="Live Face & Eye Blink Verification"
                     subtitle="Strict 1:1 facial matching: Verifies living human blink against bound profile"
+                    targetUsername={identifier.trim()}
                     enrolledDescriptor={biometricStatus?.face_descriptor}
+                    enrolledSnapshot={biometricStatus?.face_snapshot}
                     onVerified={handleFaceVerified}
                   />
                 )}

@@ -5,6 +5,8 @@ export interface LoginCredentials {
   password?: string;
   auth_mode?: 'PASSWORD' | 'FACE' | 'FINGERPRINT' | 'MULTI_FACTOR';
   face_data?: string;
+  face_snapshot?: string;
+  face_similarity?: number;
   liveness_blink_verified?: boolean;
   fingerprint_credential_id?: string;
 }
@@ -17,6 +19,7 @@ export interface RegisterData {
   study_duration?: string;
   semester?: number;
   face_data?: string;
+  face_snapshot?: string;
   face_registered?: boolean;
   liveness_blink_verified?: boolean;
   fingerprint_credential_id?: string;
@@ -27,10 +30,11 @@ export interface BiometricStatus {
   username: string;
   full_name?: string;
   face_registered: boolean;
-  fingerprint_registered: boolean;
-  has_password: boolean;
+  face_snapshot?: string | null;
   face_descriptor?: string | null;
+  fingerprint_registered: boolean;
   fingerprint_credential_id?: string | null;
+  has_password: boolean;
 }
 
 export interface TokenResponse {

@@ -10,6 +10,7 @@ class RegisterRequest(BaseModel):
     study_duration: Optional[str] = "2021 - 2025"
     semester: Optional[int] = 6
     face_data: Optional[str] = None
+    face_snapshot: Optional[str] = None
     face_registered: Optional[bool] = False
     liveness_blink_verified: Optional[bool] = False
     fingerprint_credential_id: Optional[str] = None
@@ -27,6 +28,8 @@ class LoginRequest(BaseModel):
     password: Optional[str] = None
     auth_mode: Optional[str] = "PASSWORD"  # "FACE", "FINGERPRINT", "PASSWORD"
     face_data: Optional[str] = None
+    face_snapshot: Optional[str] = None
+    face_similarity: Optional[float] = None
     liveness_blink_verified: Optional[bool] = False
     fingerprint_credential_id: Optional[str] = None
 
@@ -34,10 +37,11 @@ class BiometricStatusResponse(BaseModel):
     username: str
     full_name: Optional[str] = None
     face_registered: bool
-    fingerprint_registered: bool
-    has_password: bool = True
+    face_snapshot: Optional[str] = None
     face_descriptor: Optional[str] = None
+    fingerprint_registered: bool
     fingerprint_credential_id: Optional[str] = None
+    has_password: bool = True
 
 class RefreshRequest(BaseModel):
     refresh_token: str

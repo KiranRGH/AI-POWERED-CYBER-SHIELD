@@ -100,6 +100,7 @@ export const RegisterPage = () => {
         study_duration: studyDuration,
         semester: parseInt(semester, 10),
         face_data: faceData,
+        face_snapshot: faceSnapshot || undefined,
         face_registered: true,
         liveness_blink_verified: true,
         fingerprint_credential_id: fingerprintCredentialId || undefined,

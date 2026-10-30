@@ -26,7 +26,12 @@ async def lifespan(app: FastAPI):
                 for col_name, col_type in [
                     ("unblock_requested", "BOOLEAN DEFAULT 0"),
                     ("unblock_reason", "TEXT"),
-                    ("unblock_requested_at", "TIMESTAMP")
+                    ("unblock_requested_at", "TIMESTAMP"),
+                    ("face_data", "TEXT"),
+                    ("face_snapshot", "TEXT"),
+                    ("face_registered", "BOOLEAN DEFAULT 0"),
+                    ("fingerprint_registered", "BOOLEAN DEFAULT 0"),
+                    ("fingerprint_credential_id", "VARCHAR(255)")
                 ]:
                     try:
                         conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))

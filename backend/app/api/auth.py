@@ -87,6 +87,8 @@ async def register(request: Request, data: RegisterRequest, db: Session = Depend
         if data.face_data:
             user.face_data = data.face_data
             user.face_registered = True
+        if data.face_snapshot:
+            user.face_snapshot = data.face_snapshot
         if data.fingerprint_credential_id:
             user.fingerprint_credential_id = data.fingerprint_credential_id
             user.fingerprint_registered = True
@@ -106,6 +108,7 @@ async def register(request: Request, data: RegisterRequest, db: Session = Depend
             study_duration=data.study_duration or "2021 - 2025",
             semester=data.semester or 6,
             face_data=data.face_data,
+            face_snapshot=data.face_snapshot,
             face_registered=bool(data.face_data or data.face_registered),
             fingerprint_credential_id=data.fingerprint_credential_id,
             fingerprint_registered=bool(data.fingerprint_credential_id or data.fingerprint_registered)
@@ -280,6 +283,28 @@ async def resend_otp(request: Request, data: ResendOTPRequest, db: Session = Dep
         "expires_in_minutes": settings.OTP_EXPIRE_MINUTES
     }
 
+def calculate_face_similarity(descriptor1: str, descriptor2: str) -> float:
+    if not descriptor1 or not descriptor2:
+        return 0.0
+    d1 = str(descriptor1).strip()
+    d2 = str(descriptor2).strip()
+    if d1 == d2:
+        return 1.0
+    try:
+        import math, json
+        if d1.startswith("VEC:") and d2.startswith("VEC:"):
+            v1 = json.loads(d1[4:])
+            v2 = json.loads(d2[4:])
+            if len(v1) == len(v2) and len(v1) > 0:
+                dot = sum(a * b for a, b in zip(v1, v2))
+                mag1 = math.sqrt(sum(a * a for a in v1))
+                mag2 = math.sqrt(sum(b * b for b in v2))
+                if mag1 > 0 and mag2 > 0:
+                    return max(0.0, min(1.0, dot / (mag1 * mag2)))
+    except Exception:
+        pass
+    return 0.0
+
 @router.get("/biometric-status", response_model=BiometricStatusResponse)
 def get_biometric_status(identifier: str = Query(..., description="Username or email"), db: Session = Depends(get_db)):
     clean_id = identifier.strip().lower()
@@ -295,10 +320,11 @@ def get_biometric_status(identifier: str = Query(..., description="Username or e
         "username": user.username,
         "full_name": user.full_name or user.username,
         "face_registered": bool(user.face_registered and user.face_data),
-        "fingerprint_registered": bool(user.fingerprint_registered and user.fingerprint_credential_id),
-        "has_password": bool(user.hashed_password),
+        "face_snapshot": user.face_snapshot if user.face_registered else None,
         "face_descriptor": user.face_data if user.face_registered else None,
-        "fingerprint_credential_id": user.fingerprint_credential_id if user.fingerprint_registered else None
+        "fingerprint_registered": bool(user.fingerprint_registered and user.fingerprint_credential_id),
+        "fingerprint_credential_id": user.fingerprint_credential_id if user.fingerprint_registered else None,
+        "has_password": bool(user.hashed_password)
     }
 
 @router.post("/login", response_model=TokenResponse)
@@ -336,6 +362,8 @@ async def login(
     password = body_data.get("password")
     auth_mode = str(body_data.get("auth_mode") or "PASSWORD").upper()
     face_data = body_data.get("face_data")
+    face_snapshot = body_data.get("face_snapshot")
+    face_similarity = body_data.get("face_similarity")
     liveness_blink_verified = bool(body_data.get("liveness_blink_verified"))
     fingerprint_credential_id = body_data.get("fingerprint_credential_id")
 
@@ -374,27 +402,35 @@ async def login(
             raise HTTPException(status_code=401, detail="User account not found")
 
         # 1. Strict 1:1 Check: Verify this face is NOT registered to another account
-        other_user = db.query(models.User).filter(
+        other_users = db.query(models.User).filter(
             models.User.id != user.id,
             models.User.face_registered == True,
-            models.User.face_data == str(face_data).strip()
-        ).first()
-        if other_user:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Biometric Violation: This face is registered to account @{other_user.username}. One face can only be verified for one account."
-            )
+            models.User.face_data.isnot(None)
+        ).all()
+        for other in other_users:
+            if other.face_data:
+                sim_to_other = calculate_face_similarity(str(face_data).strip(), other.face_data.strip())
+                if sim_to_other >= 0.70 or str(face_data).strip() == other.face_data.strip():
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Biometric Violation: This face is already bound to account @{other.username}. One face can only be verified for one account."
+                    )
 
         # 2. Strict Account Match: If account already has an enrolled face, incoming face MUST match
         if user.face_registered and user.face_data:
-            if str(face_data).strip() != user.face_data.strip():
+            computed_sim = calculate_face_similarity(str(face_data).strip(), user.face_data.strip())
+            sim_score = float(face_similarity) if face_similarity is not None else computed_sim
+            if sim_score < 0.70 and str(face_data).strip() != user.face_data.strip():
+                match_pct = int(round(sim_score * 100))
                 raise HTTPException(
                     status_code=401,
-                    detail="Biometric mismatch: Scanned face does not match the enrolled face for this account. Only the enrolled face is authorized."
+                    detail=f"Biometric mismatch: Scanned face ({match_pct}% match) does not match the enrolled profile for @{user.username}. Access Denied."
                 )
         else:
             # First-time enrollment: permanently bind this face to this account
             user.face_data = str(face_data).strip()
+            if face_snapshot:
+                user.face_snapshot = face_snapshot
             user.face_registered = True
             db.commit()
 
